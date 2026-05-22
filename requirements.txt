@@ -1,0 +1,8 @@
+feedparser==6.0.11
+pytz==2024.2
+anthropic==0.42.0
+python-dotenv==1.0.1
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.149.0
+html2text==2024.2.26
