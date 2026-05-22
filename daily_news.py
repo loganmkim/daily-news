@@ -6,14 +6,18 @@ a structured brief printed to the terminal.
 """
 
 import base64
+import json
 import os
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.utils import parseaddr, parsedate_to_datetime
 
 import feedparser
 import html2text
+import markdown as md
 import pytz
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -48,11 +52,15 @@ FEEDS = [
 ]
 
 # Gmail integration — read-only access to a single Gmail label.
-GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 GMAIL_LABEL = "Newsletters"
 GMAIL_QUERY = f"label:{GMAIL_LABEL} newer_than:1d"
 GMAIL_CREDENTIALS_FILE = "credentials.json"
 GMAIL_TOKEN_FILE = "token.json"
+GMAIL_USER_EMAIL = os.getenv("GMAIL_USER_EMAIL", "loganmatthewkim@gmail.com")
 NEWSLETTER_BODY_CAP = 4000
 
 # ---------------------------------------------------------------------------
@@ -215,11 +223,18 @@ def diagnose_zero_recent(all_entries: list[dict], recent_by_source: Counter) -> 
 # ---------------------------------------------------------------------------
 
 def _get_gmail_credentials():
-    """Return valid Gmail credentials. Triggers OAuth browser flow on first run."""
+    """Return valid Gmail credentials. Triggers OAuth flow if token is missing or lacks required scopes."""
     creds = None
     if os.path.exists(GMAIL_TOKEN_FILE):
         try:
-            creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
+            with open(GMAIL_TOKEN_FILE) as _tf:
+                _token_data = json.load(_tf)
+            _token_scopes = set((_token_data.get("scopes") or "").split())
+            if not set(GMAIL_SCOPES).issubset(_token_scopes):
+                _missing = set(GMAIL_SCOPES) - _token_scopes
+                print(f"  ! token.json missing required scopes {_missing}; re-running OAuth.")
+            else:
+                creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
         except Exception as e:
             print(f"  ! Could not load {GMAIL_TOKEN_FILE} ({e}); will re-run OAuth.")
             creds = None
@@ -412,6 +427,71 @@ def fetch_gmail_newsletters() -> list[dict]:
         return []
 
 
+
+# ---------------------------------------------------------------------------
+# Email delivery.
+# ---------------------------------------------------------------------------
+
+_EMAIL_HTML = (
+    '<div style="font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;'
+    'max-width:640px;margin:0 auto;color:#1a1a1a;line-height:1.7;background:#fff;">'
+    '<div style="background:#0f172a;padding:24px 32px;border-radius:8px 8px 0 0;">'
+    '<h1 style="color:#fff;margin:0;font-size:20px;font-weight:700;letter-spacing:-0.3px;">Daily Brief</h1>'
+    '<p style="color:#64748b;margin:6px 0 0;font-size:13px;">__DATE_STR__&nbsp;&middot;&nbsp;__TIME_STR__</p>'
+    '</div>'
+    '<div style="padding:28px 32px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">'
+    '<style>'
+    'h2{font-size:17px;font-weight:700;margin:28px 0 10px;padding-bottom:8px;'
+    'border-bottom:2px solid #e2e8f0;color:#0f172a;line-height:1.3;}'
+    'ul{margin:8px 0;padding-left:20px;}'
+    'li{margin:6px 0;}'
+    'strong{color:#0f172a;}'
+    'em{color:#475569;}'
+    'p{margin:8px 0;}'
+    'blockquote{border-left:3px solid #e2e8f0;margin:12px 0;padding:8px 16px;'
+    'color:#475569;font-style:italic;background:#f8fafc;border-radius:0 4px 4px 0;}'
+    '</style>'
+    '__HTML_BODY__'
+    '</div>'
+    '<div style="padding:14px 32px;text-align:center;">'
+    '<p style="color:#94a3b8;font-size:11px;margin:0;">'
+    'Your AI briefing&nbsp;&middot;&nbsp;Sources: MarketWatch, Seeking Alpha, TechCrunch, Gmail newsletters'
+    '</p></div></div>'
+)
+
+
+
+def send_brief_email(brief: str) -> bool:
+    """Send the daily brief as plain text + HTML via Gmail API."""
+    now = datetime.now()
+    date_str = now.strftime(f"%A, %B {now.day}")
+    time_str = now.strftime("%I:%M %p")
+
+    html_body = md.markdown(brief, extensions=["extra"])
+    full_html = _EMAIL_HTML.replace("__DATE_STR__", date_str).replace("__TIME_STR__", time_str).replace("__HTML_BODY__", html_body)
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Daily Brief — {date_str}"
+    msg["From"] = GMAIL_USER_EMAIL
+    msg["To"] = GMAIL_USER_EMAIL
+    msg.attach(MIMEText(brief, "plain", "utf-8"))
+    msg.attach(MIMEText(full_html, "html", "utf-8"))
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+    try:
+        creds = _get_gmail_credentials()
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        return True
+    except HttpError as e:
+        print(f"  ! Gmail API error sending email: {e}")
+        return False
+    except Exception as e:
+        print(f"  ! Failed to send email: {e}")
+        return False
+
+
 def format_for_claude(articles: list[dict]) -> str:
     """Render the filtered articles into a plain-text block for the user message."""
     lines = []
@@ -492,6 +572,13 @@ def main() -> int:
     print("=" * 72 + "\n")
     print(brief)
     print()
+
+    print("Sending email...")
+    if send_brief_email(brief):
+        print(f"  Sent to {GMAIL_USER_EMAIL}")
+    else:
+        print("  Email send failed â see error above. Brief printed above is complete.")
+
     return 0
 
 
