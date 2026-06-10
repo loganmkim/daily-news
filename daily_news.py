@@ -271,7 +271,11 @@ def _get_gmail_credentials():
     if _GMAIL_TOKEN_JSON:
         try:
             _td = json.loads(_GMAIL_TOKEN_JSON)
-            _ts = set((_td.get("scopes") or "").split())
+            _scopes_raw = _td.get("scopes") or []
+            if isinstance(_scopes_raw, str):
+                _ts = set(_scopes_raw.split())
+            else:
+                _ts = set(_scopes_raw)
             if not set(GMAIL_SCOPES).issubset(_ts):
                 print(f"  ! GMAIL_TOKEN_JSON missing scopes {set(GMAIL_SCOPES) - _ts}; re-running OAuth.")
             else:
@@ -283,7 +287,11 @@ def _get_gmail_credentials():
         try:
             with open(GMAIL_TOKEN_FILE) as _tf:
                 _token_data = json.load(_tf)
-            _token_scopes = set((_token_data.get("scopes") or "").split())
+            _scopes_raw2 = _token_data.get("scopes") or []
+            if isinstance(_scopes_raw2, str):
+                _token_scopes = set(_scopes_raw2.split())
+            else:
+                _token_scopes = set(_scopes_raw2)
             if not set(GMAIL_SCOPES).issubset(_token_scopes):
                 print(f"  ! token.json missing required scopes {set(GMAIL_SCOPES) - _token_scopes}; re-running OAuth.")
             else:
@@ -308,6 +316,14 @@ def _get_gmail_credentials():
             print(f"  ! Token refresh failed ({e}); re-running OAuth flow.")
 
     # ── Build OAuth flow ──────────────────────────────────────────────────
+    if DETECTED_CLOUD:
+        print(
+            "ERROR: GMAIL_TOKEN_JSON is invalid or expired. "
+            "Re-run locally to refresh the token, then update the GMAIL_TOKEN_JSON GitHub Secret.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if _GOOGLE_CREDENTIALS_JSON:
         try:
             flow = InstalledAppFlow.from_client_config(
