@@ -1,0 +1,35 @@
+name: Daily News Brief
+
+# Schedule note: GitHub Actions cron runs in UTC.
+#   20:30 UTC = 1:30 PM PDT (UTC-7, summer/daylight saving)
+#   20:30 UTC = 12:30 PM PST (UTC-8, winter/standard)
+# The run shifts one hour earlier in Pacific winter time.
+# To target 1:30 PM PST in winter, change cron to '30 21 * * *' from Nov–Mar.
+on:
+  schedule:
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  daily-brief:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily news brief
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
+        run: python3 daily_news.py

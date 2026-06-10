@@ -61,6 +61,9 @@ GMAIL_QUERY = f"label:{GMAIL_LABEL} newer_than:1d"
 GMAIL_CREDENTIALS_FILE = "credentials.json"
 GMAIL_TOKEN_FILE = "token.json"
 GMAIL_USER_EMAIL = os.getenv("GMAIL_USER_EMAIL", "loganmatthewkim@gmail.com")
+DETECTED_CLOUD           = "GITHUB_ACTIONS" in os.environ
+_GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+_GMAIL_TOKEN_JSON        = os.environ.get("GMAIL_TOKEN_JSON")
 NEWSLETTER_BODY_CAP = 4000
 
 # ---------------------------------------------------------------------------
@@ -261,16 +264,28 @@ def diagnose_zero_recent(all_entries: list[dict], recent_by_source: Counter) -> 
 # ---------------------------------------------------------------------------
 
 def _get_gmail_credentials():
-    """Return valid Gmail credentials. Triggers OAuth flow if token is missing or lacks required scopes."""
+    """Return valid Gmail credentials. Supports both file (local) and env-var (cloud) modes."""
     creds = None
-    if os.path.exists(GMAIL_TOKEN_FILE):
+
+    # ── Load token ────────────────────────────────────────────────────────
+    if _GMAIL_TOKEN_JSON:
+        try:
+            _td = json.loads(_GMAIL_TOKEN_JSON)
+            _ts = set((_td.get("scopes") or "").split())
+            if not set(GMAIL_SCOPES).issubset(_ts):
+                print(f"  ! GMAIL_TOKEN_JSON missing scopes {set(GMAIL_SCOPES) - _ts}; re-running OAuth.")
+            else:
+                creds = Credentials.from_authorized_user_info(_td, GMAIL_SCOPES)
+        except Exception as e:
+            print(f"  ! Could not parse GMAIL_TOKEN_JSON ({e}); will re-run OAuth.")
+            creds = None
+    elif os.path.exists(GMAIL_TOKEN_FILE):
         try:
             with open(GMAIL_TOKEN_FILE) as _tf:
                 _token_data = json.load(_tf)
             _token_scopes = set((_token_data.get("scopes") or "").split())
             if not set(GMAIL_SCOPES).issubset(_token_scopes):
-                _missing = set(GMAIL_SCOPES) - _token_scopes
-                print(f"  ! token.json missing required scopes {_missing}; re-running OAuth.")
+                print(f"  ! token.json missing required scopes {set(GMAIL_SCOPES) - _token_scopes}; re-running OAuth.")
             else:
                 creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
         except Exception as e:
@@ -283,20 +298,33 @@ def _get_gmail_credentials():
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            with open(GMAIL_TOKEN_FILE, "w") as f:
-                f.write(creds.to_json())
+            if _GMAIL_TOKEN_JSON:
+                print("  ! Token refreshed in env-var mode — not persisted. Update GMAIL_TOKEN_JSON secret before it expires.")
+            else:
+                with open(GMAIL_TOKEN_FILE, "w") as f:
+                    f.write(creds.to_json())
             return creds
         except Exception as e:
             print(f"  ! Token refresh failed ({e}); re-running OAuth flow.")
 
-    if not os.path.exists(GMAIL_CREDENTIALS_FILE):
-        print(
-            f"ERROR: {GMAIL_CREDENTIALS_FILE} not found. Download it from Google Cloud Console.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # ── Build OAuth flow ──────────────────────────────────────────────────
+    if _GOOGLE_CREDENTIALS_JSON:
+        try:
+            flow = InstalledAppFlow.from_client_config(
+                json.loads(_GOOGLE_CREDENTIALS_JSON), GMAIL_SCOPES
+            )
+        except Exception as e:
+            print(f"ERROR: Could not parse GOOGLE_CREDENTIALS_JSON ({e})", file=sys.stderr)
+            sys.exit(1)
+    else:
+        if not os.path.exists(GMAIL_CREDENTIALS_FILE):
+            print(
+                f"ERROR: {GMAIL_CREDENTIALS_FILE} not found. Download it from Google Cloud Console.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS_FILE, GMAIL_SCOPES)
 
-    flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS_FILE, GMAIL_SCOPES)
     flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
     auth_url, _ = flow.authorization_url(prompt="consent")
     bar = "=" * 72
@@ -309,9 +337,12 @@ def _get_gmail_credentials():
     code = input("Paste the authorization code here: ").strip()
     flow.fetch_token(code=code)
     creds = flow.credentials
-    with open(GMAIL_TOKEN_FILE, "w") as f:
-        f.write(creds.to_json())
-    print(f"  OAuth complete; {GMAIL_TOKEN_FILE} saved for future runs.")
+    if not _GMAIL_TOKEN_JSON:
+        with open(GMAIL_TOKEN_FILE, "w") as f:
+            f.write(creds.to_json())
+        print(f"  OAuth complete; {GMAIL_TOKEN_FILE} saved for future runs.")
+    else:
+        print("  OAuth complete (env-var mode; token not written to file).")
     return creds
 
 
@@ -570,6 +601,9 @@ def summarize(articles: list[dict]) -> str:
 
 
 def main() -> int:
+    print(f"Environment: {'cloud' if DETECTED_CLOUD else 'local'}")
+    print(f"Credentials source: {'env var' if _GOOGLE_CREDENTIALS_JSON else 'file'}")
+    print(f"Token source: {'env var' if _GMAIL_TOKEN_JSON else 'file'}")
     all_entries: list[dict] = []
     for name, url in FEEDS:
         all_entries.extend(fetch_feed(name, url))
