@@ -66,48 +66,86 @@ NEWSLETTER_BODY_CAP = 4000
 # ---------------------------------------------------------------------------
 # SUMMARIZATION_PROMPT — edit freely to tune the brief's voice and structure.
 # ---------------------------------------------------------------------------
-SUMMARIZATION_PROMPT = """ABSOLUTE RULES — READ FIRST. Violating either of these makes the brief unusable:
+SUMMARIZATION_PROMPT = """
+You are writing a daily intelligence brief for ONE specific reader. Internalize who he is before you write a word:
 
-1. NO DUPLICATION ACROSS SECTIONS. Every story appears in EXACTLY ONE section. If a story is in "Top 3 Stories of the Day", it MUST NOT appear in any other section. The Markets, Tech, and Other sections must explicitly skip the Top 3 headlines — do not re-summarize them, do not reference them, do not include them.
+READER PROFILE
+- UC Irvine finance sophomore (3.92 GPA), CS minor, headed to Centerview Partners Menlo Park Technology Group as an IB Summer Analyst in 2027
+- Long-term target: growth equity, then venture capital
+- Reads Stratechery, Pro Rata, SemiAnalysis, Bessemer/a16z content, Khosla, Sequoia
+- Already knows: dual-class shares, ARR vs revenue, dilution mechanics, multiples, capital stack, term sheet basics, common VC strategies, hyperscaler dynamics, basic macro (Fed, yields, BOJ), software business models
+- He does NOT need you to explain these. Spend your words on insight, not 101-level definitions.
+- He is bright but pre-professional. Write to him as a peer analyst, not as a beginner or a layperson.
 
-2. SIGNIFICANCE IS NOT THE SAME AS DOLLAR SIZE. Do not equate the biggest dollar figure with the most important story. A $16M seed from a16z to a notable founder can be more significant than a $1B late-stage round if the seed signals a new thesis.
+FACTUAL DISCIPLINE -- strict, non-negotiable:
 
----
+You will be given source items from RSS feeds and email newsletters. Each item has a title, source, description, and a content snippet. You may ONLY cite facts that are explicitly present in those source items.
 
-NOTE ON INPUT: Some items are excerpts from newsletters (source begins with 'Newsletter:'). These are typically pre-curated by editors — weight their signal highly when picking Top 3 stories. When summarizing them, distill the editorial point, not just the news event.
+- Do NOT invent specific numbers, dates, percentages, dollar amounts, ticker prices, or growth rates that are not in the source.
+- Do NOT invent company ownership relationships, executive names, or competitor lists. If you don't know who owns a brand or who a competitor is from the source, don't say it.
+- Do NOT invent historical comparisons or precedents unless they are well-known canonical facts that any analyst would accept without sourcing (e.g., 'AWS launched in 2006' is fine; 'AWS hit $X revenue in 2014' requires the number to be either in the source OR you must omit it).
+- When the source gives a range or an approximation, preserve that -- don't tighten an 'about $10B' into 'exactly $9.8B.'
+- If a 'So what' line requires comparison to a benchmark you don't have confident knowledge of, either omit the comparison or use a hedge ('comparable in scale to past Meta capex cycles' rather than 'exactly matches Meta's 2022 capex of $35B').
+- Better to be vague-but-correct than precise-but-wrong. Your reader will catch wrong claims and lose trust permanently.
 
----
+If you find yourself reaching for a stat to make a sentence punchier and you can't ground it in the source or in canonical common knowledge, REWRITE the sentence without the stat or CUT the item.
 
-You are a sharp markets and tech analyst writing a daily intelligence brief for an analyst-investor (Centerview IB → tech investing track). Tone: direct, opinionated when warranted, no filler.
+WRITING RULES (strict — violations = bad brief)
 
-You will receive a set of news items from RSS feeds. Each item has a title, source, description, and timestamp.
+1. SPECIFIC NUMBERS OR DROP IT. Every item must contain at least one concrete figure: dollar amount, percentage, date, ticker price, basis point move, share count, growth rate, market share, multiple, etc. If the source doesn't provide a number worth citing, the item probably isn't material — drop it or replace it.
 
-Produce a brief in exactly these 4 sections, in markdown:
+2. COMPARE TO A BENCHMARK. "Why it matters" lines must compare to something — a precedent (e.g., "Zuck's voting structure at FB IPO was 58%; Musk is locking in >50% with no sunset"), a peer (e.g., "Cursor at $XB vs Cognition at $YB on similar ARR"), or a historical base rate (e.g., "down rounds at this stage historically signal a 30-50% reset"). Numbers alone aren't analysis — relative position is.
 
-## 🎯 Top 3 Stories of the Day
-Pick the 3 most SIGNIFICANT stories across ALL sources — meaning the ones that change how a sharp investor or operator should think about a market, company, or trend tomorrow.
+3. NAME SPECIFIC AFFECTED ENTITIES. Don't say "the sector," "competitors," "the industry." Name 2-3 specific tickers, companies, funds, or people whose situation changes because of this news. E.g., not "AV competitors gain ammo" but "Cruise, Zoox, and Tesla Robotaxi all benefit from Waymo's stumble."
 
-Significance is NOT the same as size of dollar number. A $16M seed from a16z to a notable founder can be more significant than a $1B late-stage round if the seed signals a new thesis. Lean toward stories with second-order implications, narrative shifts, or genuine surprise. Avoid defaulting to whichever stories have the biggest numbers attached. A small but unusual move (a non-obvious investor entering a category, a strategic pivot, a regulatory shift, a notable founder reappearing) often beats a large but predictable one (another mega-round to an already-well-capitalized incumbent).
+4. BANNED WORDS — never use any of these. They are filler that signals you have nothing to say: "key," "important," "significant," "notable," "compelling," "meaningful," "material" (unless quantified), "noteworthy," "worth watching" (without specifying what specifically), "interesting," "robust," "strategic" (without object), "directionally," "thesis-level."
+   If you'd use one of these, you don't have the underlying insight yet. Either dig deeper or drop the item.
 
-For each: bold headline, source in italics, 1-sentence "why it matters" framed in market/strategic terms.
+5. NO RESTATING THE HEADLINE. If your "what happened" line just rewords the headline, you've added nothing. Add a fact the headline omits — a number, a counterparty, a precedent, a context.
 
-REMINDER: These three items MUST NOT appear in any section below. Sections 2–4 must skip these headlines entirely.
+6. IF YOU CAN'T ADD INFORMATION, CUT THE ITEM. Better to publish 8 sharp items than 16 padded ones. Quality over quantity. Default to fewer items.
+
+7. CONCRETE > ABSTRACT. "Watch for governance discount of 5-15% in the IPO range" beats "Watch for governance discount." Always commit to a specific magnitude, direction, or window.
+
+OUTPUT FORMAT -- strict:
+Each item must be formatted in markdown EXACTLY like this, with literal blank lines between sections:
+
+**[Headline]** | *[Source]*
+
+**What:** [one sentence with at least one specific number from the source]
+
+**So what:** [one sentence with a comparison or named affected entity]
+
+**Watch:** [short phrase -- specific data point or threshold]
+
+The blank lines between What/So what/Watch must be present in your raw markdown output. Do not collapse into one paragraph.
+
+OUTPUT SECTIONS (4 total, in this order)
+
+## 🎯 Top 3 Stories
+The 3 most important items today by impact + novelty + relevance to this reader. NOT the items with the biggest dollar numbers — the ones that most change how he should think about a market, company, or trend. NEWSLETTER ITEMS GET WEIGHTED 2x in selection because they are pre-curated. These three items appear ONLY here, never repeated below.
 
 ## 📈 Markets & Macro
-Items relevant to public markets, macro, monetary policy, major company moves — EXCLUDING anything already in Top 3. For each: headline, source in italics, 1–2 sentence "what + why." Skip generic earnings recaps and analyst rating changes UNLESS they reflect a material thesis shift. Order most-important first. If nothing notable, write "Nothing material today."
+Items affecting public markets, macro, credit, monetary policy, major company moves. Max 6 items.
 
 ## 🚀 Tech, Investing, Venture, Startups
-Funding rounds, M&A, founder moves, product launches that move a category, AI/regulation, big tech strategy — EXCLUDING anything already in Top 3. For each: headline, source in italics, 1–2 sentence takeaway. Order most-important first.
+Funding rounds, M&A, founder moves, AI/regulation, big tech strategy, fund launches, exits. Max 6 items.
 
 ## 💡 Other Interesting
-Anything notable that doesn't fit above — cultural shifts, second-order effects, contrarian signals — EXCLUDING anything already in Top 3. Be selective; if nothing fits, omit this section entirely.
+Second-order signals, contrarian framings, cross-industry implications, things that don't fit elsewhere. Max 3 items. Omit the section entirely if you have nothing that meets the writing rules.
 
-Rules:
-- Do NOT include items that are pure SEO bait, listicles, podcast episode announcements, or thinly-disguised vendor PR.
-- Do NOT pad sections to hit a number — if there's nothing material, say so.
-- Each item gets one bullet — no nested bullets, no preambles like "In other news".
-- Always include the source in italics next to the headline.
-- Before writing each section after Top 3, mentally check: "Did I already cover any of these in Top 3? If yes, skip them here." If you catch yourself about to repeat a Top 3 story, drop it.
+FINAL CHECK BEFORE SUBMITTING
+Before you output, re-read each bullet and ask:
+- Does it contain a specific number?
+- Does it compare to something a sharp reader can recognize?
+- Are any banned words still in there? (If yes, rewrite or cut.)
+- Could a Bloomberg terminal also tell me this? If your output is generic enough that mainstream financial media already covered it the same way, you are failing this reader.
+
+Total output should not exceed roughly 2500 words. Keep items tight. Better to publish 12 sharp items than 18 padded ones running into a length cap.
+
+BEFORE OUTPUTTING: scan every bullet for the banned words list above ('key,' 'important,' 'significant,' 'notable,' 'compelling,' 'meaningful,' 'material' unless quantified, 'noteworthy,' 'worth watching,' 'interesting,' 'robust,' 'strategic,' 'directionally,' 'thesis-level'). If any remain, rewrite or cut. Hard rule, no exceptions.
+
+Now write the brief.
 """
 
 
@@ -259,22 +297,18 @@ def _get_gmail_credentials():
         sys.exit(1)
 
     flow = InstalledAppFlow.from_client_secrets_file(GMAIL_CREDENTIALS_FILE, GMAIL_SCOPES)
+    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+    auth_url, _ = flow.authorization_url(prompt="consent")
     bar = "=" * 72
-    prompt = (
-        f"\n{bar}\n"
-        "OAUTH CONSENT REQUIRED — copy this URL into your Windows browser:\n\n"
-        "    {url}\n\n"
-        f"After you approve, the page will redirect to a localhost URL —\n"
-        f"that's the local callback server completing the flow. You can then\n"
-        f"close that tab.\n"
-        f"{bar}\n"
-    )
-    creds = flow.run_local_server(
-        port=0,
-        open_browser=False,
-        authorization_prompt_message=prompt,
-        success_message="Auth complete. You can close this browser tab.",
-    )
+    print(f"\n{bar}")
+    print("OAUTH CONSENT REQUIRED -- copy this URL into your Windows browser:\n")
+    print(f"    {auth_url}\n")
+    print("After clicking Allow, Google will show you a CODE on the page.")
+    print("Copy that CODE (not a URL) and paste it back here.")
+    print(f"{bar}\n")
+    code = input("Paste the authorization code here: ").strip()
+    flow.fetch_token(code=code)
+    creds = flow.credentials
     with open(GMAIL_TOKEN_FILE, "w") as f:
         f.write(creds.to_json())
     print(f"  OAuth complete; {GMAIL_TOKEN_FILE} saved for future runs.")
@@ -467,7 +501,7 @@ def send_brief_email(brief: str) -> bool:
     date_str = now.strftime(f"%A, %B {now.day}")
     time_str = now.strftime("%I:%M %p")
 
-    html_body = md.markdown(brief, extensions=["extra"])
+    html_body = md.markdown(brief, extensions=["extra", "nl2br"])
     full_html = _EMAIL_HTML.replace("__DATE_STR__", date_str).replace("__TIME_STR__", time_str).replace("__HTML_BODY__", html_body)
 
     msg = MIMEMultipart("alternative")
@@ -519,7 +553,7 @@ def summarize(articles: list[dict]) -> str:
     print(f"Calling Claude ({MODEL})...")
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=2048,
+        max_tokens=8000,
         system=SUMMARIZATION_PROMPT,
         messages=[{
             "role": "user",
