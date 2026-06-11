@@ -16,6 +16,7 @@ from email.mime.text import MIMEText
 from email.utils import parseaddr, parsedate_to_datetime
 
 import feedparser
+import yfinance as yf
 import html2text
 import markdown as md
 import pytz
@@ -131,26 +132,22 @@ The 3 most important items today by impact + novelty + relevance to this reader.
 ## 📈 Markets & Macro
 START this section with a "Markets close" block structured exactly as follows:
 
-ONE SENTENCE — are markets up or down overall today and what is mainly driving it. E.g., "Markets closed lower today as a hotter-than-expected CPI print pushed rate-cut expectations further out." or "Markets rallied today on softening inflation data and strong tech earnings."
+ONE SENTENCE — are markets up or down overall today and what is mainly driving it. Base this sentence on the news articles; do not invent macro narratives.
 
 Then a blank line.
 
-Then THREE LINES, consecutive with no blank lines between them (they must render as stacked lines in the email):
+Then the index lines. An INDEX_DATA block is at the top of the user message with authoritative closing values — copy those numbers VERBATIM. Apply color coding based on sign:
+- Up (+ percentage): <span style="color: #16a34a;">$X,XXX (+X.X%)</span>
+- Down (- percentage): <span style="color: #dc2626;">$X,XXX (-X.X%)</span>
+- Flat (within ±0.05%): no span, plain text
+
+Format the three index lines consecutively with no blank lines between them (they must render as stacked lines in the email):
 
 **S&P 500:** <span style="color: #16a34a;">$5,847 (+0.7%)</span>
 **Nasdaq:** <span style="color: #dc2626;">$18,234 (-1.2%)</span>
 **Russell 2000:** <span style="color: #16a34a;">$2,341 (+0.4%)</span>
 
-Rules for the index block:
-- Index values are whole dollars only, comma-separated (e.g., $5,847 not $5847).
-- Percentage to one decimal place (e.g., +0.7%, -1.2%).
-- The dollar value AND percentage together go inside the color span.
-- Color: up → <span style="color: #16a34a;">...</span>; down → <span style="color: #dc2626;">...</span>; flat (within ±0.05%) → no span, plain text.
-- Order: S&P 500, Nasdaq, Russell 2000.
-- If source data does NOT include closing values for an index: omit that line entirely. Do not write "data not available."
-- If NONE of the indices appear in sources: write ONLY "**Markets close:** Index-level data not in today's sources." — skip the driver sentence and all index lines.
-- If a source mentions direction but not the dollar value or percentage: omit that index line. Never invent numbers.
-- The driver sentence must be grounded in items present in the source list. Do not invent macro narratives.
+If INDEX_DATA says "Not available today": write "Index data not available today." on a single line instead of the three index lines. Still write the driver sentence based on the news articles.
 
 Then a blank line.
 
@@ -612,7 +609,50 @@ def format_for_claude(articles: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def summarize(articles: list[dict]) -> str:
+def fetch_index_data() -> dict | None:
+    """Fetch latest closes for S&P 500, Nasdaq, Russell 2000 via yfinance.
+    Returns a dict or None if the fetch fails for any reason."""
+    SYMBOLS = {"sp500": "^GSPC", "nasdaq": "^IXIC", "russell": "^RUT"}
+    try:
+        result: dict = {}
+        for key, sym in SYMBOLS.items():
+            ticker = yf.Ticker(sym)
+            hist = ticker.history(period="5d")
+            close_series = hist["Close"].dropna()
+            if len(close_series) < 2:
+                print(f"  ! yfinance: insufficient history for {sym}")
+                return None
+            close_f = float(close_series.iloc[-1])
+            prev_f  = float(close_series.iloc[-2])
+            change_pct = round((close_f - prev_f) / prev_f * 100, 1)
+            direction = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
+            result[key] = {"close": round(close_f), "change_pct": change_pct, "direction": direction}
+        result["as_of"] = hist.index[-1].strftime("%Y-%m-%d")
+        return result
+    except Exception as exc:
+        print(f"  ! yfinance fetch failed: {exc}")
+        return None
+
+
+def _format_index_block(index_data: dict | None) -> str:
+    """Render the INDEX_DATA block injected into the Claude user message."""
+    if index_data is None:
+        return "INDEX_DATA: Not available today."
+    def _line(label, key):
+        d = index_data[key]
+        sign = "+" if d["change_pct"] >= 0 else ""
+        return f"{label} close: ${d['close']:,} ({sign}{d['change_pct']}%)"
+    lines = [
+        "INDEX_DATA (use these exact numbers in the Markets close block -- do not modify or interpret):",
+        _line("S&P 500", "sp500"),
+        _line("Nasdaq", "nasdaq"),
+        _line("Russell 2000", "russell"),
+        f"As of: {index_data['as_of']}",
+    ]
+    return "\n".join(lines)
+
+
+def summarize(articles: list[dict], index_data: dict | None) -> str:
     """Call Claude to produce the structured brief."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -621,6 +661,7 @@ def summarize(articles: list[dict]) -> str:
 
     client = Anthropic(api_key=api_key)
     payload = format_for_claude(articles)
+    index_block = _format_index_block(index_data)
 
     print(f"Calling Claude ({MODEL})...")
     resp = client.messages.create(
@@ -630,6 +671,7 @@ def summarize(articles: list[dict]) -> str:
         messages=[{
             "role": "user",
             "content": (
+                f"{index_block}\n\n"
                 f"Today is {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (UTC). "
                 f"Here are {len(articles)} articles from the last {LOOKBACK_HOURS} hours:\n\n"
                 f"{payload}"
@@ -675,7 +717,17 @@ def main() -> int:
         print("No articles to summarize. Exiting.")
         return 0
 
-    brief = summarize(capped)
+    print("\nFetching index data (yfinance)...")
+    index_data = fetch_index_data()
+    if index_data:
+        for lbl, key in [("S&P 500", "sp500"), ("Nasdaq ", "nasdaq"), ("Russell", "russell")]:
+            d = index_data[key]
+            sign = "+" if d["change_pct"] >= 0 else ""
+            print(f"  {lbl}: ${d['close']:,} ({sign}{d['change_pct']}%)")
+    else:
+        print("  Index data not available.")
+
+    brief = summarize(capped, index_data)
     print("\n" + "=" * 72)
     print("DAILY BRIEF")
     print("=" * 72 + "\n")
