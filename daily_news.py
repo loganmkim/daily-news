@@ -611,23 +611,46 @@ def format_for_claude(articles: list[dict]) -> str:
 
 def fetch_index_data() -> dict | None:
     """Fetch latest closes for S&P 500, Nasdaq, Russell 2000 via yfinance.
+    Prefers today's close in US/Eastern; falls back to most recent non-NaN
+    close (yesterday on weekends, holidays, or pre-market runs).
     Returns a dict or None if the fetch fails for any reason."""
     SYMBOLS = {"sp500": "^GSPC", "nasdaq": "^IXIC", "russell": "^RUT"}
+    eastern  = pytz.timezone("US/Eastern")
+    today_et = datetime.now(eastern).date()
     try:
         result: dict = {}
+        used_date = None
         for key, sym in SYMBOLS.items():
             ticker = yf.Ticker(sym)
-            hist = ticker.history(period="5d")
-            close_series = hist["Close"].dropna()
-            if len(close_series) < 2:
-                print(f"  ! yfinance: insufficient history for {sym}")
+            hist   = ticker.history(period="5d")
+            if hist.empty:
+                print(f"  ! yfinance: no data returned for {sym}")
                 return None
-            close_f = float(close_series.iloc[-1])
-            prev_f  = float(close_series.iloc[-2])
+            hist.index = hist.index.tz_convert(eastern)
+            clean = hist["Close"].dropna()
+            if len(clean) < 2:
+                print(f"  ! yfinance: insufficient non-NaN history for {sym}")
+                return None
+            latest_date = clean.index[-1].date()
+            print(f"  yfinance {sym}: latest close date in market TZ: {latest_date}")
+            clean_dates = [ts.date() for ts in clean.index]
+            if today_et in clean_dates:
+                pos = len(clean_dates) - 1 - clean_dates[::-1].index(today_et)
+                if pos == 0:
+                    print(f"  ! yfinance: no prior trading day before today for {sym}")
+                    return None
+                close_f   = float(clean.iloc[pos])
+                prev_f    = float(clean.iloc[pos - 1])
+                used_date = today_et
+            else:
+                close_f   = float(clean.iloc[-1])
+                prev_f    = float(clean.iloc[-2])
+                used_date = clean.index[-1].date()
+            print(f"  yfinance: using close as of: {used_date}")
             change_pct = round((close_f - prev_f) / prev_f * 100, 1)
-            direction = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
+            direction  = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
             result[key] = {"close": round(close_f), "change_pct": change_pct, "direction": direction}
-        result["as_of"] = hist.index[-1].strftime("%Y-%m-%d")
+        result["as_of"] = used_date.strftime("%Y-%m-%d")
         return result
     except Exception as exc:
         print(f"  ! yfinance fetch failed: {exc}")
