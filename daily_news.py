@@ -129,7 +129,32 @@ OUTPUT SECTIONS (4 total, in this order)
 The 3 most important items today by impact + novelty + relevance to this reader. NOT the items with the biggest dollar numbers — the ones that most change how he should think about a market, company, or trend. NEWSLETTER ITEMS GET WEIGHTED 2x in selection because they are pre-curated. These three items appear ONLY here, never repeated below.
 
 ## 📈 Markets & Macro
-Items affecting public markets, macro, credit, monetary policy, major company moves. Max 6 items.
+START this section with a "Markets close" block structured exactly as follows:
+
+ONE SENTENCE — are markets up or down overall today and what is mainly driving it. E.g., "Markets closed lower today as a hotter-than-expected CPI print pushed rate-cut expectations further out." or "Markets rallied today on softening inflation data and strong tech earnings."
+
+Then a blank line.
+
+Then THREE LINES, consecutive with no blank lines between them (they must render as stacked lines in the email):
+
+**S&P 500:** <span style="color: #16a34a;">$5,847 (+0.7%)</span>
+**Nasdaq:** <span style="color: #dc2626;">$18,234 (-1.2%)</span>
+**Russell 2000:** <span style="color: #16a34a;">$2,341 (+0.4%)</span>
+
+Rules for the index block:
+- Index values are whole dollars only, comma-separated (e.g., $5,847 not $5847).
+- Percentage to one decimal place (e.g., +0.7%, -1.2%).
+- The dollar value AND percentage together go inside the color span.
+- Color: up → <span style="color: #16a34a;">...</span>; down → <span style="color: #dc2626;">...</span>; flat (within ±0.05%) → no span, plain text.
+- Order: S&P 500, Nasdaq, Russell 2000.
+- If source data does NOT include closing values for an index: omit that line entirely. Do not write "data not available."
+- If NONE of the indices appear in sources: write ONLY "**Markets close:** Index-level data not in today's sources." — skip the driver sentence and all index lines.
+- If a source mentions direction but not the dollar value or percentage: omit that index line. Never invent numbers.
+- The driver sentence must be grounded in items present in the source list. Do not invent macro narratives.
+
+Then a blank line.
+
+Then continue with the regular Markets & Macro bullets (What/So what/Watch format). Items affecting public markets, macro, credit, monetary policy, major company moves. Max 6 items.
 
 ## 🚀 Tech, Investing, Venture, Startups
 Funding rounds, M&A, founder moves, AI/regulation, big tech strategy, fund launches, exits. Max 6 items.
