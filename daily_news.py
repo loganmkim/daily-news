@@ -16,7 +16,7 @@ from email.mime.text import MIMEText
 from email.utils import parseaddr, parsedate_to_datetime
 
 import feedparser
-import yfinance as yf
+import requests
 import html2text
 import markdown as md
 import pytz
@@ -130,13 +130,19 @@ OUTPUT SECTIONS (4 total, in this order)
 The 3 most important items today by impact + novelty + relevance to this reader. NOT the items with the biggest dollar numbers — the ones that most change how he should think about a market, company, or trend. NEWSLETTER ITEMS GET WEIGHTED 2x in selection because they are pre-curated. These three items appear ONLY here, never repeated below.
 
 ## 📈 Markets & Macro
-START this section with a "Markets close" block structured exactly as follows:
+Look at the INDEX_DATA block at the top of the user message and pick the matching case for the Markets close block:
+
+CASE A — markets closed: INDEX_DATA begins with "Markets closed for" (e.g., "Markets closed for the weekend.", "Markets closed for Memorial Day."). Write that exact closure message verbatim as the ONLY content of the Markets close block — no driver sentence, no index lines. Then a blank line, then continue with the regular Markets & Macro bullets below as normal.
+
+CASE B — data not available: INDEX_DATA reads "Not available today." Write the driver sentence (one sentence: are markets up or down overall today and what is mainly driving it, based on the news articles), then a blank line, then write "Index data not available today." on a single line, then a blank line, then continue with the bullets.
+
+CASE C — data available: INDEX_DATA contains the three index values. Start with a "Markets close" block structured exactly as follows:
 
 ONE SENTENCE — are markets up or down overall today and what is mainly driving it. Base this sentence on the news articles; do not invent macro narratives.
 
 Then a blank line.
 
-Then the index lines. An INDEX_DATA block is at the top of the user message with authoritative closing values — copy those numbers VERBATIM. Apply color coding based on sign:
+Then the index lines. Copy the numbers from INDEX_DATA VERBATIM. Apply color coding based on sign:
 - Up (+ percentage): <span style="color: #16a34a;">$X,XXX (+X.X%)</span>
 - Down (- percentage): <span style="color: #dc2626;">$X,XXX (-X.X%)</span>
 - Flat (within ±0.05%): no span, plain text
@@ -146,8 +152,6 @@ Format the three index lines consecutively with no blank lines between them (the
 **S&P 500:** <span style="color: #16a34a;">$5,847 (+0.7%)</span>
 **Nasdaq:** <span style="color: #dc2626;">$18,234 (-1.2%)</span>
 **Russell 2000:** <span style="color: #16a34a;">$2,341 (+0.4%)</span>
-
-If INDEX_DATA says "Not available today": write "Index data not available today." on a single line instead of the three index lines. Still write the driver sentence based on the news articles.
 
 Then a blank line.
 
@@ -566,9 +570,9 @@ _EMAIL_HTML = (
 
 def send_brief_email(brief: str) -> bool:
     """Send the daily brief as plain text + HTML via Gmail API."""
-    now = datetime.now()
+    now = datetime.now(pytz.timezone("US/Pacific"))
     date_str = now.strftime(f"%A, %B {now.day}")
-    time_str = now.strftime("%I:%M %p")
+    time_str = now.strftime("%I:%M %p PT")
 
     html_body = md.markdown(brief, extensions=["extra", "nl2br"])
     full_html = _EMAIL_HTML.replace("__DATE_STR__", date_str).replace("__TIME_STR__", time_str).replace("__HTML_BODY__", html_body)
@@ -609,56 +613,93 @@ def format_for_claude(articles: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def fetch_index_data() -> dict | None:
-    """Fetch latest closes for S&P 500, Nasdaq, Russell 2000 via yfinance.
-    Prefers today's close in US/Eastern; falls back to most recent non-NaN
-    close (yesterday on weekends, holidays, or pre-market runs).
-    Returns a dict or None if the fetch fails for any reason."""
-    SYMBOLS = {"sp500": "^GSPC", "nasdaq": "^IXIC", "russell": "^RUT"}
-    eastern  = pytz.timezone("US/Eastern")
+# US market holidays for 2026 (NYSE/Nasdaq full-day closures).
+_US_MARKET_HOLIDAYS_2026 = {
+    (1, 1): "New Year's Day",
+    (1, 19): "MLK Day",
+    (2, 16): "Presidents Day",
+    (4, 3): "Good Friday",
+    (5, 25): "Memorial Day",
+    (6, 19): "Juneteenth",
+    (7, 3): "Independence Day",
+    (9, 7): "Labor Day",
+    (11, 26): "Thanksgiving",
+    (12, 25): "Christmas",
+}
+
+
+def get_market_closure_reason() -> str | None:
+    """If today (US/Eastern) is a weekend or 2026 market holiday, return a
+    'Markets closed for X.' message. Otherwise return None."""
+    eastern = pytz.timezone("US/Eastern")
     today_et = datetime.now(eastern).date()
+    if today_et.weekday() >= 5:
+        return "Markets closed for the weekend."
+    if today_et.year == 2026:
+        name = _US_MARKET_HOLIDAYS_2026.get((today_et.month, today_et.day))
+        if name:
+            return f"Markets closed for {name}."
+    return None
+
+
+def fetch_index_data() -> dict | None:
+    """Fetch latest closes for SPY (S&P 500), QQQ (Nasdaq), IWM (Russell 2000)
+    via the Alpha Vantage GLOBAL_QUOTE endpoint. Returns a dict shaped like
+    {"sp500": {...}, "nasdaq": {...}, "russell": {...}, "as_of": "YYYY-MM-DD"}
+    or None on any failure (missing key, HTTP error, rate-limit note, parse error)."""
+    api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    if not api_key:
+        print("  ! ALPHAVANTAGE_API_KEY not set; skipping index fetch")
+        return None
+
+    symbols = [("sp500", "SPY"), ("nasdaq", "QQQ"), ("russell", "IWM")]
+    result: dict = {}
+    latest_trading_day = ""
     try:
-        result: dict = {}
-        used_date = None
-        for key, sym in SYMBOLS.items():
-            ticker = yf.Ticker(sym)
-            hist   = ticker.history(period="5d")
-            if hist.empty:
-                print(f"  ! yfinance: no data returned for {sym}")
+        for key, sym in symbols:
+            url = (
+                "https://www.alphavantage.co/query"
+                f"?function=GLOBAL_QUOTE&symbol={sym}&apikey={api_key}"
+            )
+            resp = requests.get(url, timeout=15)
+            if resp.status_code != 200:
+                print(f"  ! Alpha Vantage HTTP {resp.status_code} for {sym}")
                 return None
-            hist.index = hist.index.tz_convert(eastern)
-            clean = hist["Close"].dropna()
-            if len(clean) < 2:
-                print(f"  ! yfinance: insufficient non-NaN history for {sym}")
+            data = resp.json()
+            if "Note" in data or "Information" in data or "Error Message" in data:
+                msg = data.get("Note") or data.get("Information") or data.get("Error Message")
+                print(f"  ! Alpha Vantage rate-limit/error for {sym}: {msg}")
                 return None
-            latest_date = clean.index[-1].date()
-            print(f"  yfinance {sym}: latest close date in market TZ: {latest_date}")
-            clean_dates = [ts.date() for ts in clean.index]
-            if today_et in clean_dates:
-                pos = len(clean_dates) - 1 - clean_dates[::-1].index(today_et)
-                if pos == 0:
-                    print(f"  ! yfinance: no prior trading day before today for {sym}")
-                    return None
-                close_f   = float(clean.iloc[pos])
-                prev_f    = float(clean.iloc[pos - 1])
-                used_date = today_et
-            else:
-                close_f   = float(clean.iloc[-1])
-                prev_f    = float(clean.iloc[-2])
-                used_date = clean.index[-1].date()
-            print(f"  yfinance: using close as of: {used_date}")
-            change_pct = round((close_f - prev_f) / prev_f * 100, 1)
-            direction  = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
-            result[key] = {"close": round(close_f), "change_pct": change_pct, "direction": direction}
-        result["as_of"] = used_date.strftime("%Y-%m-%d")
+            quote = data.get("Global Quote") or {}
+            if not quote:
+                print(f"  ! Alpha Vantage: no Global Quote for {sym}; payload={data}")
+                return None
+            try:
+                price_f = float(quote["05. price"])
+                pct_raw = quote["10. change percent"].rstrip("%").strip()
+                change_pct = round(float(pct_raw), 1)
+                trade_date = quote.get("07. latest trading day", "")
+            except (KeyError, TypeError, ValueError) as exc:
+                print(f"  ! Alpha Vantage: could not parse fields for {sym}: {exc}")
+                return None
+            direction = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
+            result[key] = {"close": round(price_f), "change_pct": change_pct, "direction": direction}
+            latest_trading_day = trade_date or latest_trading_day
+            print(f"  Alpha Vantage {sym}: ${round(price_f):,} ({change_pct}%) as of {trade_date}")
+        result["as_of"] = latest_trading_day
         return result
+    except requests.RequestException as exc:
+        print(f"  ! Alpha Vantage request failed: {exc}")
+        return None
     except Exception as exc:
-        print(f"  ! yfinance fetch failed: {exc}")
+        print(f"  ! Alpha Vantage fetch failed: {exc}")
         return None
 
 
-def _format_index_block(index_data: dict | None) -> str:
+def _format_index_block(index_data: dict | None, closure_reason: str | None = None) -> str:
     """Render the INDEX_DATA block injected into the Claude user message."""
+    if closure_reason:
+        return f"INDEX_DATA: {closure_reason}"
     if index_data is None:
         return "INDEX_DATA: Not available today."
     def _line(label, key):
@@ -675,7 +716,7 @@ def _format_index_block(index_data: dict | None) -> str:
     return "\n".join(lines)
 
 
-def summarize(articles: list[dict], index_data: dict | None) -> str:
+def summarize(articles: list[dict], index_data: dict | None, closure_reason: str | None = None) -> str:
     """Call Claude to produce the structured brief."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -684,7 +725,7 @@ def summarize(articles: list[dict], index_data: dict | None) -> str:
 
     client = Anthropic(api_key=api_key)
     payload = format_for_claude(articles)
-    index_block = _format_index_block(index_data)
+    index_block = _format_index_block(index_data, closure_reason)
 
     print(f"Calling Claude ({MODEL})...")
     resp = client.messages.create(
@@ -740,17 +781,22 @@ def main() -> int:
         print("No articles to summarize. Exiting.")
         return 0
 
-    print("\nFetching index data (yfinance)...")
-    index_data = fetch_index_data()
-    if index_data:
-        for lbl, key in [("S&P 500", "sp500"), ("Nasdaq ", "nasdaq"), ("Russell", "russell")]:
-            d = index_data[key]
-            sign = "+" if d["change_pct"] >= 0 else ""
-            print(f"  {lbl}: ${d['close']:,} ({sign}{d['change_pct']}%)")
+    closure_reason = get_market_closure_reason()
+    if closure_reason:
+        print(f"\n{closure_reason} Skipping Alpha Vantage fetch.")
+        index_data = None
     else:
-        print("  Index data not available.")
+        print("\nFetching index data (Alpha Vantage)...")
+        index_data = fetch_index_data()
+        if index_data:
+            for lbl, key in [("S&P 500", "sp500"), ("Nasdaq ", "nasdaq"), ("Russell", "russell")]:
+                d = index_data[key]
+                sign = "+" if d["change_pct"] >= 0 else ""
+                print(f"  {lbl}: ${d['close']:,} ({sign}{d['change_pct']}%)")
+        else:
+            print("  Index data not available.")
 
-    brief = summarize(capped, index_data)
+    brief = summarize(capped, index_data, closure_reason)
     print("\n" + "=" * 72)
     print("DAILY BRIEF")
     print("=" * 72 + "\n")
