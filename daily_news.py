@@ -644,63 +644,131 @@ def get_market_closure_reason() -> str | None:
 
 
 def fetch_index_data() -> dict | None:
-    """Fetch latest closes for SPY (S&P 500), QQQ (Nasdaq), IWM (Russell 2000)
-    via the Alpha Vantage GLOBAL_QUOTE endpoint. Returns a dict shaped like
-    {"sp500": {...}, "nasdaq": {...}, "russell": {...}, "as_of": "YYYY-MM-DD"}
-    or None on any failure (missing key, HTTP error, rate-limit note, parse error)."""
-    api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+    """Fetch latest closes for the S&P 500 (SPX), Nasdaq Composite (IXIC), and
+    Russell 2000 (RUT) via the Twelve Data /quote endpoint. Returns a dict shaped
+    like {"sp500": {...}, "nasdaq": {...}, "russell": {...}, "as_of": "YYYY-MM-DD"}
+    or None on any failure (missing key, HTTP error, API error, parse error).
+
+    Swap rationale: we moved off Alpha Vantage because its free tier does NOT
+    support direct index symbols — it only returns ETF proxies (SPY/QQQ/IWM),
+    whose dollar values don't match the actual index levels users expect. Twelve
+    Data's free tier supports real index symbols (SPX/IXIC/RUT) on /quote. The
+    old Alpha Vantage implementation is kept commented out below for easy revert.
+    """
+    api_key = os.environ.get("TWELVEDATA_API_KEY")
     if not api_key:
-        print("  ! ALPHAVANTAGE_API_KEY not set; skipping index fetch")
+        print("  ! TWELVEDATA_API_KEY not set; skipping index fetch")
         return None
 
-    symbols = [("sp500", "SPY"), ("nasdaq", "QQQ"), ("russell", "IWM")]
+    # Twelve Data index symbols (free tier supports these directly):
+    #   S&P 500 -> SPX, Nasdaq Composite -> IXIC, Russell 2000 -> RUT
+    symbols = [("sp500", "SPX"), ("nasdaq", "IXIC"), ("russell", "RUT")]
     result: dict = {}
     latest_trading_day = ""
     try:
         for i, (key, sym) in enumerate(symbols):
-            # Free-tier limits: 25/day AND 1 req/sec. Space calls out.
+            # Free tier: 8 credits/request against an 800/day cap, so 3 calls =
+            # 24 credits/run — well within limits. Keep a 1.5s spacer between
+            # calls as a defensive guard against per-second rate limits.
             if i > 0:
                 time.sleep(1.5)
-            url = (
-                "https://www.alphavantage.co/query"
-                f"?function=GLOBAL_QUOTE&symbol={sym}&apikey={api_key}"
-            )
+            url = f"https://api.twelvedata.com/quote?symbol={sym}&apikey={api_key}"
+            print(f"  Twelve Data: requesting {sym} ...")
             resp = requests.get(url, timeout=15)
             if resp.status_code != 200:
-                print(f"  ! Alpha Vantage HTTP {resp.status_code} for {sym}")
+                print(f"  ! Twelve Data HTTP {resp.status_code} for {sym}")
                 return None
             data = resp.json()
-            if "Note" in data or "Information" in data:
-                msg = data.get("Note") or data.get("Information")
-                print(f"  ! Alpha Vantage RATE LIMIT for {sym}: {msg}")
-                return None
-            if "Error Message" in data:
-                print(f"  ! Alpha Vantage error for {sym}: {data['Error Message']}")
-                return None
-            quote = data.get("Global Quote") or {}
-            if not quote:
-                print(f"  ! Alpha Vantage: no Global Quote for {sym}; payload={data}")
+            # On error Twelve Data returns {"code": ..., "message": ..., "status": "error"}
+            if isinstance(data, dict) and data.get("status") == "error":
+                print(f"  ! Twelve Data error for {sym}: "
+                      f"{data.get('code')} {data.get('message')}")
                 return None
             try:
-                price_f = float(quote["05. price"])
-                pct_raw = quote["10. change percent"].rstrip("%").strip()
-                change_pct = round(float(pct_raw), 1)
-                trade_date = quote.get("07. latest trading day", "")
+                price_f = float(data["close"])
+                change_pct = round(float(data["percent_change"]), 1)
+                # datetime may be "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"; take the date.
+                trade_date = str(data.get("datetime", "")).split(" ")[0]
             except (KeyError, TypeError, ValueError) as exc:
-                print(f"  ! Alpha Vantage: could not parse fields for {sym}: {exc}")
+                print(f"  ! Twelve Data: could not parse fields for {sym}: {exc}; payload={data}")
                 return None
             direction = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
             result[key] = {"close": round(price_f), "change_pct": change_pct, "direction": direction}
             latest_trading_day = trade_date or latest_trading_day
-            print(f"  Alpha Vantage {sym}: ${round(price_f):,} ({change_pct}%) as of {trade_date}")
+            print(f"  Twelve Data {sym}: ${round(price_f):,} ({change_pct}%) as of {trade_date}")
         result["as_of"] = latest_trading_day
+        print(f"  Twelve Data: all indices fetched, as_of={latest_trading_day}")
         return result
     except requests.RequestException as exc:
-        print(f"  ! Alpha Vantage request failed: {exc}")
+        print(f"  ! Twelve Data request failed: {exc}")
         return None
     except Exception as exc:
-        print(f"  ! Alpha Vantage fetch failed: {exc}")
+        print(f"  ! Twelve Data fetch failed: {exc}")
         return None
+
+
+# --- DEPRECATED: Alpha Vantage implementation (kept for revert) -------------
+# Alpha Vantage's free tier does not support direct index symbols, so this
+# fetched ETF proxies (SPY/QQQ/IWM) whose prices don't match the real index
+# levels. Replaced by the Twelve Data implementation above. To revert: restore
+# this function, re-enable ALPHAVANTAGE_API_KEY in the workflow YAML, and remove
+# the Twelve Data version.
+#
+# def fetch_index_data() -> dict | None:
+#     api_key = os.environ.get("ALPHAVANTAGE_API_KEY")
+#     if not api_key:
+#         print("  ! ALPHAVANTAGE_API_KEY not set; skipping index fetch")
+#         return None
+#
+#     symbols = [("sp500", "SPY"), ("nasdaq", "QQQ"), ("russell", "IWM")]
+#     result: dict = {}
+#     latest_trading_day = ""
+#     try:
+#         for i, (key, sym) in enumerate(symbols):
+#             # Free-tier limits: 25/day AND 1 req/sec. Space calls out.
+#             if i > 0:
+#                 time.sleep(1.5)
+#             url = (
+#                 "https://www.alphavantage.co/query"
+#                 f"?function=GLOBAL_QUOTE&symbol={sym}&apikey={api_key}"
+#             )
+#             resp = requests.get(url, timeout=15)
+#             if resp.status_code != 200:
+#                 print(f"  ! Alpha Vantage HTTP {resp.status_code} for {sym}")
+#                 return None
+#             data = resp.json()
+#             if "Note" in data or "Information" in data:
+#                 msg = data.get("Note") or data.get("Information")
+#                 print(f"  ! Alpha Vantage RATE LIMIT for {sym}: {msg}")
+#                 return None
+#             if "Error Message" in data:
+#                 print(f"  ! Alpha Vantage error for {sym}: {data['Error Message']}")
+#                 return None
+#             quote = data.get("Global Quote") or {}
+#             if not quote:
+#                 print(f"  ! Alpha Vantage: no Global Quote for {sym}; payload={data}")
+#                 return None
+#             try:
+#                 price_f = float(quote["05. price"])
+#                 pct_raw = quote["10. change percent"].rstrip("%").strip()
+#                 change_pct = round(float(pct_raw), 1)
+#                 trade_date = quote.get("07. latest trading day", "")
+#             except (KeyError, TypeError, ValueError) as exc:
+#                 print(f"  ! Alpha Vantage: could not parse fields for {sym}: {exc}")
+#                 return None
+#             direction = "up" if change_pct > 0.05 else ("down" if change_pct < -0.05 else "flat")
+#             result[key] = {"close": round(price_f), "change_pct": change_pct, "direction": direction}
+#             latest_trading_day = trade_date or latest_trading_day
+#             print(f"  Alpha Vantage {sym}: ${round(price_f):,} ({change_pct}%) as of {trade_date}")
+#         result["as_of"] = latest_trading_day
+#         return result
+#     except requests.RequestException as exc:
+#         print(f"  ! Alpha Vantage request failed: {exc}")
+#         return None
+#     except Exception as exc:
+#         print(f"  ! Alpha Vantage fetch failed: {exc}")
+#         return None
+# ---------------------------------------------------------------------------
 
 
 def _format_index_block(index_data: dict | None, closure_reason: str | None = None) -> str:

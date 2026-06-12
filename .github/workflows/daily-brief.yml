@@ -32,5 +32,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
-          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          # Index data source swapped from Alpha Vantage to Twelve Data: the
+          # Alpha Vantage free tier doesn't support direct index symbols (only
+          # ETF proxies SPY/QQQ/IWM), whereas Twelve Data supports SPX/IXIC/RUT.
+          # ALPHAVANTAGE_API_KEY kept commented out for easy revert.
+          # ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
         run: python3 daily_news.py
