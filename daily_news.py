@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -656,7 +657,10 @@ def fetch_index_data() -> dict | None:
     result: dict = {}
     latest_trading_day = ""
     try:
-        for key, sym in symbols:
+        for i, (key, sym) in enumerate(symbols):
+            # Free-tier limits: 25/day AND 1 req/sec. Space calls out.
+            if i > 0:
+                time.sleep(1.5)
             url = (
                 "https://www.alphavantage.co/query"
                 f"?function=GLOBAL_QUOTE&symbol={sym}&apikey={api_key}"
@@ -666,9 +670,12 @@ def fetch_index_data() -> dict | None:
                 print(f"  ! Alpha Vantage HTTP {resp.status_code} for {sym}")
                 return None
             data = resp.json()
-            if "Note" in data or "Information" in data or "Error Message" in data:
-                msg = data.get("Note") or data.get("Information") or data.get("Error Message")
-                print(f"  ! Alpha Vantage rate-limit/error for {sym}: {msg}")
+            if "Note" in data or "Information" in data:
+                msg = data.get("Note") or data.get("Information")
+                print(f"  ! Alpha Vantage RATE LIMIT for {sym}: {msg}")
+                return None
+            if "Error Message" in data:
+                print(f"  ! Alpha Vantage error for {sym}: {data['Error Message']}")
                 return None
             quote = data.get("Global Quote") or {}
             if not quote:
