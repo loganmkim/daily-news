@@ -858,10 +858,10 @@ def main() -> int:
 
     closure_reason = get_market_closure_reason()
     if closure_reason:
-        print(f"\n{closure_reason} Skipping Alpha Vantage fetch.")
+        print(f"\n{closure_reason} Skipping index data fetch.")
         index_data = None
     else:
-        print("\nFetching index data (Alpha Vantage)...")
+        print("\nFetching index data...")
         index_data = fetch_index_data()
         if index_data:
             for lbl, key in [("S&P 500", "sp500"), ("Nasdaq ", "nasdaq"), ("Russell", "russell")]:
